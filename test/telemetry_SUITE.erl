@@ -245,11 +245,11 @@ no_execute_on_specific(Config) ->
 %% unhandled events can be listed
 list_unhandled(_Config) ->
     Event = [a, test],
-    Measurements = #{data => 3},
+    Measurements = #{measurement => 3},
     Metadata = #{some => data},
 
     telemetry:execute(Event, Measurements, Metadata),
-    ?assertEqual([{[a, test]}], telemetry:list_unhandled_events()).
+    ?assertEqual([{[a, test, measurement]}], telemetry:list_unhandled_events()).
 
 %% handler can be attached to many events at once
 handler_on_multiple_events(Config) ->

@@ -165,7 +165,7 @@ execute(EventName, Value, Metadata) when is_number(Value) ->
     execute(EventName, #{value => Value}, Metadata);
 execute([_ | _] = EventName, Measurements, Metadata) when is_map(Measurements) and is_map(Metadata) ->
     Handlers = telemetry_handler_table:list_for_event(EventName),
-    _ = maybe_persist_unhandled_event(Handlers, EventName),
+    _ = maybe_persist_unhandled_event(Handlers, EventName, Measurements),
 
     ApplyFun =
         fun(#handler{id=HandlerId,
@@ -431,12 +431,14 @@ report_cb(#{handler_id := Id}) ->
         [Id]
     }.
 
-maybe_persist_unhandled_event([], EventName) ->
+maybe_persist_unhandled_event([], EventName, Measurements) ->
+    MeasurementKeys = maps:keys(Measurements),
+
     try
-        ets:insert(telemetry_unhandled_events_table, {EventName})
+        ets:insert(telemetry_unhandled_events_table, {EventName ++ MeasurementKeys})
     catch
         _:_ ->
             ok
     end;
-maybe_persist_unhandled_event(_EventHandlers, _EventName) ->
+maybe_persist_unhandled_event(_EventHandlers, _EventName, _Measurements) ->
     ok.
