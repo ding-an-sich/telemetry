@@ -8,13 +8,16 @@
 %%%-------------------------------------------------------------------
 -module(telemetry).
 
--export([attach/4,
-         attach_many/4,
-         detach/1,
-         list_handlers/1,
-         execute/2,
-         execute/3,
-         span/3]).
+-export([
+    attach/4,
+    attach_many/4,
+    detach/1,
+    list_handlers/1,
+    list_unhandled_events/0,
+    execute/2,
+    execute/3,
+    span/3
+]).
 
 -export([report_cb/1]).
 
@@ -27,25 +30,31 @@
 -type event_value() :: number().
 -type event_prefix() :: [atom()].
 -type handler_config() :: term().
--type handler_function() :: fun((event_name(), event_measurements(), event_metadata(), handler_config()) -> any()).
+-type handler_function() :: fun(
+    (event_name(), event_measurements(), event_metadata(), handler_config()) -> any()
+).
 -type span_result() :: term().
 -type span_function() :: fun(() -> {span_result(), event_metadata()}).
--type handler() :: #{id := handler_id(),
-                     event_name := event_name(),
-                     function := handler_function(),
-                     config := handler_config()}.
+-type handler() :: #{
+    id := handler_id(),
+    event_name := event_name(),
+    function := handler_function(),
+    config := handler_config()
+}.
 
--export_type([handler_id/0,
-              event_name/0,
-              event_measurements/0,
-              event_metadata/0,
-              event_value/0,
-              event_prefix/0,
-              handler_config/0,
-              handler_function/0,
-              handler/0,
-              span_result/0,
-              span_function/0]).
+-export_type([
+    handler_id/0,
+    event_name/0,
+    event_measurements/0,
+    event_metadata/0,
+    event_value/0,
+    event_prefix/0,
+    handler_config/0,
+    handler_function/0,
+    handler/0,
+    span_result/0,
+    span_function/0
+]).
 
 -import_lib("kernel/import/logger.hrl").
 
@@ -71,10 +80,10 @@
 %%
 %% Note that you should not rely on the order in which handlers are invoked.
 -spec attach(HandlerId, EventName, Function, Config) -> ok | {error, already_exists} when
-      HandlerId :: handler_id(),
-      EventName :: event_name(),
-      Function :: handler_function(),
-      Config :: handler_config().
+    HandlerId :: handler_id(),
+    EventName :: event_name(),
+    Function :: handler_function(),
+    Config :: handler_config().
 attach(HandlerId, EventName, Function, Config) ->
     attach_many(HandlerId, [EventName], Function, Config).
 
@@ -99,22 +108,26 @@ attach(HandlerId, EventName, Function, Config) ->
 %%
 %% Note that you should not rely on the order in which handlers are invoked.
 -spec attach_many(HandlerId, [EventName], Function, Config) -> ok | {error, already_exists} when
-      HandlerId :: handler_id(),
-      EventName :: event_name(),
-      Function :: handler_function(),
-      Config :: handler_config().
+    HandlerId :: handler_id(),
+    EventName :: event_name(),
+    Function :: handler_function(),
+    Config :: handler_config().
 attach_many(HandlerId, EventNames, Function, Config) when is_function(Function, 4) ->
     assert_event_names(EventNames),
     case erlang:fun_info(Function, type) of
         {type, external} ->
             ok;
         {type, local} ->
-            ?LOG_INFO(#{handler_id => HandlerId,
-                        event_names => EventNames,
-                        function => Function,
-                        config => Config,
-                        type => local},
-                      #{report_cb => fun ?MODULE:report_cb/1})
+            ?LOG_INFO(
+                #{
+                    handler_id => HandlerId,
+                    event_names => EventNames,
+                    function => Function,
+                    config => Config,
+                    type => local
+                },
+                #{report_cb => fun ?MODULE:report_cb/1}
+            )
     end,
     telemetry_handler_table:insert(HandlerId, EventNames, Function, Config).
 
@@ -143,15 +156,17 @@ detach(HandlerId) ->
 %% the guidelines laid out in {@link span/3} if you are capturing start/stop events.
 %% </p>
 -spec execute(EventName, Measurements, Metadata) -> ok when
-      EventName :: event_name(),
-      Measurements :: event_measurements() | event_value(),
-      Metadata :: event_metadata().
+    EventName :: event_name(),
+    Measurements :: event_measurements() | event_value(),
+    Metadata :: event_metadata().
 execute(EventName, Value, Metadata) when is_number(Value) ->
     ?LOG_WARNING("Using execute/3 with a single event value is deprecated. "
                  "Use a measurement map instead.", []),
     execute(EventName, #{value => Value}, Metadata);
 execute([_ | _] = EventName, Measurements, Metadata) when is_map(Measurements) and is_map(Metadata) ->
     Handlers = telemetry_handler_table:list_for_event(EventName),
+    _ = maybe_persist_unhandled_event(Handlers, EventName),
+
     ApplyFun =
         fun(#handler{id=HandlerId,
                      function=HandlerFunction,
@@ -199,7 +214,7 @@ execute([_ | _] = EventName, Measurements, Metadata) when is_map(Measurements) a
 %%
 %% A default span context is added to event metadata under the `telemetry_span_context' key if none is provided by
 %% the user in the `StartMetadata'. This context is useful for tracing libraries to identify unique
-%% executions of span events within a process to match start, stop, and exception events. Metadata keys, which 
+%% executions of span events within a process to match start, stop, and exception events. Metadata keys, which
 %% should be available to both `start' and `stop' events need to supplied separately for `StartMetadata' and
 %% `StopMetadata'.
 %%
@@ -340,8 +355,8 @@ span(EventPrefix, StartMetadata, SpanFunction) ->
 
 %% @equiv execute(EventName, Measurements, #{})
 -spec execute(EventName, Measurements) -> ok when
-      EventName :: event_name(),
-      Measurements :: event_measurements() | event_value().
+    EventName :: event_name(),
+    Measurements :: event_measurements() | event_value().
 execute(EventName, Measurements) ->
     execute(EventName, Measurements, #{}).
 
@@ -353,14 +368,23 @@ execute(EventName, Measurements) ->
 -spec list_handlers(event_prefix()) -> [handler()].
 list_handlers(EventPrefix) ->
     assert_event_prefix(EventPrefix),
-    [#{id => HandlerId,
-       event_name => EventName,
-       function => Function,
-       config => Config} || #handler{id=HandlerId,
-                                     event_name=EventName,
-                                     function=Function,
-                                     config=Config} <- telemetry_handler_table:list_by_prefix(EventPrefix)].
+    [
+        #{
+            id => HandlerId,
+            event_name => EventName,
+            function => Function,
+            config => Config
+        }
+     || #handler{
+            id = HandlerId,
+            event_name = EventName,
+            function = Function,
+            config = Config
+        } <- telemetry_handler_table:list_by_prefix(EventPrefix)
+    ].
 
+list_unhandled_events() ->
+    ets:tab2list(telemetry_unhandled_events_table).
 %%
 
 -spec assert_event_names(term()) -> [ok].
@@ -397,9 +421,22 @@ merge_ctx(Metadata, Ctx) -> Metadata#{telemetry_span_context => Ctx}.
 
 %% @private
 report_cb(#{handler_id := Id}) ->
-    {"The function passed as a handler with ID ~w is a local function.\n"
-     "This means that it is either an anonymous function or a capture of a function "
-     "without a module specified. That may cause a performance penalty when calling "
-     "that handler. For more details see the note in `telemetry:attach/4` "
-     "documentation.\n\n"
-     "https://hexdocs.pm/telemetry/telemetry.html#attach/4", [Id]}.
+    {
+        "The function passed as a handler with ID ~w is a local function.\n"
+        "This means that it is either an anonymous function or a capture of a function "
+        "without a module specified. That may cause a performance penalty when calling "
+        "that handler. For more details see the note in `telemetry:attach/4` "
+        "documentation.\n\n"
+        "https://hexdocs.pm/telemetry/telemetry.html#attach/4",
+        [Id]
+    }.
+
+maybe_persist_unhandled_event([], EventName) ->
+    try
+        ets:insert(telemetry_unhandled_events_table, {EventName})
+    catch
+        _:_ ->
+            ok
+    end;
+maybe_persist_unhandled_event(_EventHandlers, _EventName) ->
+    ok.
